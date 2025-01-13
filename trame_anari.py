@@ -159,6 +159,7 @@ class AnariView:
         # user interaction
         self._rotate_camera = False
         self._mouse_pos = (0, 0)
+        self._move_id = 0
 
         # store time frame is rendered at
         self._frame_time = round(time.time_ns() / 1000000)
@@ -284,18 +285,24 @@ class AnariView:
     # handler for mouse movement -> return whether or not rerender is required
     def onMouseMove(self, mouse_x, mouse_y):
         if self._rotate_camera:
-            delta_x = mouse_x - self._mouse_pos[0]
-            delta_y = mouse_y - self._mouse_pos[1]
-            self._mpi_comm.Bcast((np.array([3, delta_x, delta_y], dtype=np.int16), 3, MPI.INT16_T), root=0)
-            self.rotateCamera(delta_x, delta_y)
-            return True
+            if self._move_id % 4 == 0:
+                delta_x = mouse_x - self._mouse_pos[0]
+                delta_y = mouse_y - self._mouse_pos[1]
+                self._mouse_pos = (mouse_x, mouse_y)
+                self._move_id += 1
+                self._mpi_comm.Bcast((np.array([3, delta_x, delta_y], dtype=np.int16), 3, MPI.INT16_T), root=0)
+                self.rotateCamera(delta_x, delta_y)
+                return True
+            else:
+                self._move_id += 1
+                return False
         else:
             return False
 
     # rotate camera
     def rotateCamera(self, delta_x, delta_y):
-        self._cam_theta -= math.radians(delta_x * 0.01)
-        self._cam_phi = min(max(self._cam_phi + math.radians(delta_y * 0.01), math.radians(1.0)), math.radians(179.0))
+        self._cam_theta -= math.radians(delta_x * 0.1)
+        self._cam_phi = min(max(self._cam_phi + math.radians(delta_y * 0.1), math.radians(1.0)), math.radians(179.0))
         cam_position = self._calculateCameraPosition()
         self._camera.setParameter('position',anari.FLOAT32_VEC3, cam_position)
         direction = [self._cam_target[0] - cam_position[0],
