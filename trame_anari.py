@@ -30,14 +30,16 @@ def main():
     else:
         finished = False
         while not finished:
-            signal = np.empty(3, dtype=np.uint16)
-            comm.Bcast((signal, 3, MPI.UINT16_T), root=0)
+            signal = np.empty(3, dtype=np.int16)
+            comm.Bcast((signal, 3, MPI.INT16_T), root=0)
             if signal[0] == 0:    # quit
                 finished = True
             elif signal[0] == 1:  # rerender
                 view.render()
             elif signal[0] == 2:  # resize
                 view.setRenderSize(int(signal[1]), int(signal[2]))
+            elif signal[0] == 3:  # rotate camera
+                view.rotateCamera(int(signal[1]), int(signal[2]))
 
 def setupTrameServer(view):
     # set up Trame application
@@ -154,6 +156,10 @@ class AnariView:
         self._num_tasks = mpi_size
         self._mpi_comm = comm
 
+        # user interaction
+        self._rotate_camera = False
+        self._mouse_pos = (0, 0)
+
         # store time frame is rendered at
         self._frame_time = round(time.time_ns() / 1000000)
         
@@ -164,10 +170,14 @@ class AnariView:
         self._framebuffer_size = (512, 512)
         
         # initial camera parameters
-        self._cam_position = (-2.5, 3.5, 7.5)
+        self._cam_theta = math.radians(-15.0)
+        self._cam_phi = math.radians(90.0)
+        self._cam_radius = 9.0
+        #self._cam_position = (-2.5, 3.5, 7.5)
         self._cam_target = (0.0, 0.0, 0.0)
         self._cam_up = (0.0, 1.0, 0.0)
         self._fovy = math.radians(40.0)
+        cam_position = self._calculateCameraPosition()
 
         # initial number of ray samples per pixel
         self._ray_samples = 4
@@ -182,10 +192,10 @@ class AnariView:
         # set up camera
         self._camera = self._device.newCamera('perspective')
         self._camera.setParameter('aspect', anari.FLOAT32, self._framebuffer_size[0] / self._framebuffer_size[1])
-        self._camera.setParameter('position',anari.FLOAT32_VEC3, self._cam_position)
-        direction = [self._cam_target[0] - self._cam_position[0],
-                     self._cam_target[1] - self._cam_position[1],
-                     self._cam_target[2] - self._cam_position[2]]
+        self._camera.setParameter('position',anari.FLOAT32_VEC3, cam_position)
+        direction = [self._cam_target[0] - cam_position[0],
+                     self._cam_target[1] - cam_position[1],
+                     self._cam_target[2] - cam_position[2]]
         self._camera.setParameter('direction', anari.float3, direction)
         self._camera.setParameter('up', anari.float3, self._cam_up)
         self._camera.setParameter('fovy', anari.FLOAT32, self._fovy)
@@ -216,12 +226,12 @@ class AnariView:
 
     #
     def triggerRender(self):
-        self._mpi_comm.Bcast((np.array([1, 0, 0], dtype=np.uint16), 3, MPI.UINT16_T), root=0)
+        self._mpi_comm.Bcast((np.array([1, 0, 0], dtype=np.int16), 3, MPI.INT16_T), root=0)
         self.render()
 
     #
     def triggerResize(self, width, height):
-        self._mpi_comm.Bcast((np.array([2, width, height], dtype=np.uint16), 3, MPI.UINT16_T), root=0)
+        self._mpi_comm.Bcast((np.array([2, width, height], dtype=np.int16), 3, MPI.INT16_T), root=0)
         self.setRenderSize(width, height)
 
     # render frame
@@ -264,11 +274,42 @@ class AnariView:
 
     # handler for left mouse button -> return whether or not rerender is required
     def onLeftMouseButton(self, mouse_x, mouse_y, pressed):
+        if pressed:
+            self._rotate_camera = True
+            self._mouse_pos = (mouse_x, mouse_y)
+        else:
+            self._rotate_camera = False
         return False
 
     # handler for mouse movement -> return whether or not rerender is required
     def onMouseMove(self, mouse_x, mouse_y):
-        return False
+        if self._rotate_camera:
+            delta_x = mouse_x - self._mouse_pos[0]
+            delta_y = mouse_y - self._mouse_pos[1]
+            self._mpi_comm.Bcast((np.array([3, delta_x, delta_y], dtype=np.int16), 3, MPI.INT16_T), root=0)
+            self.rotateCamera(delta_x, delta_y)
+            return True
+        else:
+            return False
+
+    # rotate camera
+    def rotateCamera(self, delta_x, delta_y):
+        self._cam_theta -= math.radians(delta_x * 0.01)
+        self._cam_phi = min(max(self._cam_phi + math.radians(delta_y * 0.01), math.radians(1.0)), math.radians(179.0))
+        cam_position = self._calculateCameraPosition()
+        self._camera.setParameter('position',anari.FLOAT32_VEC3, cam_position)
+        direction = [self._cam_target[0] - cam_position[0],
+                     self._cam_target[1] - cam_position[1],
+                     self._cam_target[2] - cam_position[2]]
+        self._camera.setParameter('direction', anari.float3, direction)
+        self._camera.commitParameters()
+
+    # calculate camera position based on spherical coords
+    def _calculateCameraPosition(self):
+        x = self._cam_radius * math.sin(self._cam_phi) * math.sin(self._cam_theta)
+        y = self._cam_radius * math.cos(self._cam_phi)
+        z = self._cam_radius * math.sin(self._cam_phi) * math.cos(self._cam_theta)
+        return (x, y, z)
 
     # create ANARI surfaces
     def _createSurfaces(self):
