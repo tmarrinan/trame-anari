@@ -279,7 +279,7 @@ class AnariView:
             img = Image.fromarray(pixels)
             img = img.transpose(Image.FLIP_TOP_BOTTOM)
             img = img.convert('RGB')
-            img.save(anari_composite_image, 'JPEG')
+            img.save(anari_composite_image, 'JPEG', quality=85)
             return np.frombuffer(anari_composite_image.getbuffer(), dtype=np.uint8)
         else:
             return None
