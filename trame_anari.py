@@ -102,6 +102,9 @@ class RcaViewAdapter:
             'st': 0,
             'key': 'key'
         }
+        self._mouse_pos_start = (0, 0)
+        self._mouse_pos = (0, 0)
+        self._mouse_down = False
 
         self.area_name = name
 
@@ -137,10 +140,16 @@ class RcaViewAdapter:
         rerender = False
 
         if event_type == 'LeftButtonPress':
+            self._mouse_down = True
+            self._mouse_pos_start = (event['x'], event['y'])
+            self._mouse_pos = (event['x'], event['y'])
+            asyncio.create_task(self._animate())
             rerender = self._view.onLeftMouseButton(event['x'], event['y'], True)
         elif event_type == 'LeftButtonRelease':
+            self._mouse_down = False
             rerender = self._view.onLeftMouseButton(event['x'], event['y'], False)
         elif event_type == 'MouseMove':
+            self._mouse_pos = (event['x'], event['y'])
             rerender = self._view.onMouseMove(event['x'], event['y'])
 
         if rerender:
@@ -148,6 +157,20 @@ class RcaViewAdapter:
             frame_data = self._view.getFrame()
             self._streamer.push_content(self.area_name, self._getMetadata(), frame_data.data)
 
+    async def _animate(self):
+        while self._mouse_down:
+            start_time = time.time()
+            delta_x = self._mouse_pos[0] - self._mouse_pos_start[0]
+            delta_y = self._mouse_pos[1] - self._mouse_pos_start[1]
+            if delta_x != 0 or delta_y != 0:
+                self._mouse_pos_start = self._mouse_pos
+                self._view.triggerRotateCamera(delta_x, delta_y)
+                self._view.triggerRender()
+                frame_data = self._view.getFrame()
+                self._streamer.push_content(self.area_name, self._getMetadata(), frame_data.data)
+            duration = time.time() - start_time
+            wait = max(0.033333 - duration, 0.0)
+            await asyncio.sleep(wait)
 
 # Trame custom ANARI view
 class AnariView:
@@ -155,11 +178,6 @@ class AnariView:
         self._task_id = mpi_rank
         self._num_tasks = mpi_size
         self._mpi_comm = comm
-
-        # user interaction
-        self._rotate_camera = False
-        self._mouse_pos = (0, 0)
-        self._move_id = 0
 
         # store time frame is rendered at
         self._frame_time = round(time.time_ns() / 1000000)
@@ -235,6 +253,11 @@ class AnariView:
         self._mpi_comm.Bcast((np.array([2, width, height], dtype=np.int16), 3, MPI.INT16_T), root=0)
         self.setRenderSize(width, height)
 
+    #
+    def triggerRotateCamera(self, delta_x, delta_y):
+        self._mpi_comm.Bcast((np.array([3, delta_x, delta_y], dtype=np.int16), 3, MPI.INT16_T), root=0)
+        self.rotateCamera(delta_x, delta_y)
+
     # render frame
     def render(self):
         self._frame_time = round(time.time_ns() / 1000000)
@@ -275,29 +298,11 @@ class AnariView:
 
     # handler for left mouse button -> return whether or not rerender is required
     def onLeftMouseButton(self, mouse_x, mouse_y, pressed):
-        if pressed:
-            self._rotate_camera = True
-            self._mouse_pos = (mouse_x, mouse_y)
-        else:
-            self._rotate_camera = False
         return False
 
     # handler for mouse movement -> return whether or not rerender is required
     def onMouseMove(self, mouse_x, mouse_y):
-        if self._rotate_camera:
-            if self._move_id % 4 == 0:
-                delta_x = mouse_x - self._mouse_pos[0]
-                delta_y = mouse_y - self._mouse_pos[1]
-                self._mouse_pos = (mouse_x, mouse_y)
-                self._move_id += 1
-                self._mpi_comm.Bcast((np.array([3, delta_x, delta_y], dtype=np.int16), 3, MPI.INT16_T), root=0)
-                self.rotateCamera(delta_x, delta_y)
-                return True
-            else:
-                self._move_id += 1
-                return False
-        else:
-            return False
+        return False
 
     # rotate camera
     def rotateCamera(self, delta_x, delta_y):
