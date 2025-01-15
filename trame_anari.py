@@ -3,6 +3,7 @@ sys.path.append('/home/tmarrinan/local/lib')
 
 import asyncio
 import math
+import random
 import time
 import io
 from trame.app import get_server, asynchronous
@@ -13,6 +14,8 @@ import pynari as anari
 from PIL import Image
 from mpi4py import MPI
 
+
+CUBE_DIM = 8
 
 def main():
     # initialize MPI
@@ -343,17 +346,21 @@ class AnariView:
 
     # create ANARI surfaces
     def _createSurfaces(self):
-        total_cubes = 8
-        cube_centers = [
-            (-0.8, -0.8, -0.8),
-            ( 0.8, -0.8, -0.8),
-            (-0.8,  0.8, -0.8),
-            ( 0.8,  0.8, -0.8),
-            (-0.8, -0.8,  0.8),
-            ( 0.8, -0.8,  0.8),
-            (-0.8,  0.8,  0.8),
-            ( 0.8,  0.8,  0.8)
-        ]
+        cube_dim = CUBE_DIM
+        total_cubes = cube_dim * cube_dim * cube_dim
+        grid_len = 3.0
+        cube_len = grid_len / (1.5 * cube_dim - 0.5)
+        grid_start = -0.5 * grid_len + 0.5 * cube_len
+        cube_centers = []
+        for z in range(cube_dim):
+            for y in range(cube_dim):
+                for x in range(cube_dim):
+                    center = (
+                        grid_start + 1.5 * cube_len * x,
+                        grid_start + 1.5 * cube_len * y,
+                        grid_start + 1.5 * cube_len * z
+                    )
+                    cube_centers.append(center)
 
         surfaces = []
 
@@ -365,14 +372,14 @@ class AnariView:
         start_idx = self._task_id * num_cubes
         for i in range(num_cubes):
             center = cube_centers[start_idx + i]
-            vertices.append((-0.5 + center[0], -0.5 + center[1], -0.5 + center[2]))
-            vertices.append(( 0.5 + center[0], -0.5 + center[1], -0.5 + center[2]))
-            vertices.append((-0.5 + center[0],  0.5 + center[1], -0.5 + center[2]))
-            vertices.append(( 0.5 + center[0],  0.5 + center[1], -0.5 + center[2]))
-            vertices.append((-0.5 + center[0], -0.5 + center[1],  0.5 + center[2]))
-            vertices.append(( 0.5 + center[0], -0.5 + center[1],  0.5 + center[2]))
-            vertices.append((-0.5 + center[0],  0.5 + center[1],  0.5 + center[2]))
-            vertices.append(( 0.5 + center[0],  0.5 + center[1],  0.5 + center[2]))
+            vertices.append((-0.5 * cube_len + center[0], -0.5 * cube_len + center[1], -0.5 * cube_len + center[2]))
+            vertices.append(( 0.5 * cube_len + center[0], -0.5 * cube_len + center[1], -0.5 * cube_len + center[2]))
+            vertices.append((-0.5 * cube_len + center[0],  0.5 * cube_len + center[1], -0.5 * cube_len + center[2]))
+            vertices.append(( 0.5 * cube_len + center[0],  0.5 * cube_len + center[1], -0.5 * cube_len + center[2]))
+            vertices.append((-0.5 * cube_len + center[0], -0.5 * cube_len + center[1],  0.5 * cube_len + center[2]))
+            vertices.append(( 0.5 * cube_len + center[0], -0.5 * cube_len + center[1],  0.5 * cube_len + center[2]))
+            vertices.append((-0.5 * cube_len + center[0],  0.5 * cube_len + center[1],  0.5 * cube_len + center[2]))
+            vertices.append(( 0.5 * cube_len + center[0],  0.5 * cube_len + center[1],  0.5 * cube_len + center[2]))
             indices.append((8 * i + 1, 8 * i + 0, 8 * i + 3))
             indices.append((8 * i + 0, 8 * i + 2, 8 * i + 3))
             indices.append((8 * i + 5, 8 * i + 1, 8 * i + 7))
@@ -414,6 +421,13 @@ class AnariView:
             (task_colors[self._task_id][1] / 255) ** 2.2,
             (task_colors[self._task_id][2] / 255) ** 2.2
         )
+        """
+        rgb = (
+            (random.randint(35, 225) / 255) ** 2.2,
+            (random.randint(35, 225) / 255) ** 2.2,
+            (random.randint(35, 225) / 255) ** 2.2
+        )
+        """
 
         mat = self._device.newMaterial('physicallyBased')
         mat.setParameter('baseColor', anari.float3, rgb)
