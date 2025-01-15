@@ -40,6 +40,8 @@ def main():
                 view.setRenderSize(int(signal[1]), int(signal[2]))
             elif signal[0] == 3:  # rotate camera
                 view.rotateCamera(int(signal[1]), int(signal[2]))
+            elif signal[0] == 4:  # change sample rate
+                view.setNumberOfSamples(int(signal[1]))
 
 def setupTrameServer(view):
     # set up Trame application
@@ -57,7 +59,7 @@ def setupTrameServer(view):
 
     # callback for change in number of path tracing samples per pixel
     def uiStateNumSamplesUpdate(num_samples, **kwargs):
-        view.setNumberOfSamples(num_samples)
+        #view.setNumberOfSamples(num_samples)
         if view_handler is not None:
             view_handler.pushFrame()
 
@@ -145,7 +147,7 @@ class RcaViewAdapter:
             self._mouse_pos = (event['x'], event['y'])
             asyncio.create_task(self._animate())
             rerender = self._view.onLeftMouseButton(event['x'], event['y'], True)
-        elif event_type == 'LeftButtonRelease':
+        elif event_type == 'LeftButtonRelease' and self._mouse_down:
             self._mouse_down = False
             rerender = self._view.onLeftMouseButton(event['x'], event['y'], False)
         elif event_type == 'MouseMove':
@@ -199,7 +201,7 @@ class AnariView:
         cam_position = self._calculateCameraPosition()
 
         # initial number of ray samples per pixel
-        self._ray_samples = 4
+        self._ray_samples = 16
 
         # add geometry to scene
         surfaces = self._createSurfaces()
@@ -258,6 +260,16 @@ class AnariView:
         self._mpi_comm.Bcast((np.array([3, delta_x, delta_y], dtype=np.int16), 3, MPI.INT16_T), root=0)
         self.rotateCamera(delta_x, delta_y)
 
+    #
+    def triggerStartInteraction(self):
+        self._mpi_comm.Bcast((np.array([4, 1, 0], dtype=np.int16), 3, MPI.INT16_T), root=0)
+        self.setNumberOfSamples(1)
+
+    #
+    def triggerStopInteraction(self):
+        self._mpi_comm.Bcast((np.array([4, self._ray_samples, 0], dtype=np.int16), 3, MPI.INT16_T), root=0)
+        self.setNumberOfSamples(self._ray_samples)
+        
     # render frame
     def render(self):
         self._frame_time = round(time.time_ns() / 1000000)
@@ -279,14 +291,15 @@ class AnariView:
             img = Image.fromarray(pixels)
             img = img.transpose(Image.FLIP_TOP_BOTTOM)
             img = img.convert('RGB')
-            img.save(anari_composite_image, 'JPEG', quality=85)
+            img.save(anari_composite_image, 'JPEG', quality=92)
             return np.frombuffer(anari_composite_image.getbuffer(), dtype=np.uint8)
         else:
             return None
 
     # set number of samples
     def setNumberOfSamples(self, num):
-        self._ray_samples = num
+        self._renderer.setParameter('pixelSamples', anari.INT32, num)
+        self._renderer.commitParameters()
 
     # set render frame size
     def setRenderSize(self, width, height):
@@ -298,7 +311,12 @@ class AnariView:
 
     # handler for left mouse button -> return whether or not rerender is required
     def onLeftMouseButton(self, mouse_x, mouse_y, pressed):
-        return False
+        if pressed:
+            self.triggerStartInteraction()
+            return False
+        else:
+            self.triggerStopInteraction()
+            return True
 
     # handler for mouse movement -> return whether or not rerender is required
     def onMouseMove(self, mouse_x, mouse_y):
