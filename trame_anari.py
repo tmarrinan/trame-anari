@@ -43,8 +43,6 @@ def main():
                 view.setRenderSize(int(signal[1]), int(signal[2]))
             elif signal[0] == 3:  # rotate camera
                 view.rotateCamera(int(signal[1]), int(signal[2]))
-            elif signal[0] == 4:  # change sample rate
-                view.setNumberOfSamples(int(signal[1]))
 
 def setupTrameServer(view):
     # set up Trame application
@@ -110,8 +108,12 @@ class RcaViewAdapter:
         self._mouse_pos_start = (0, 0)
         self._mouse_pos = (0, 0)
         self._mouse_down = False
+        self._render_count = 0
+        self._max_render_count = 64
 
         self.area_name = name
+
+        asyncio.create_task(self._animate())
 
     def pushFrame(self):
         if self._streamer is not None:
@@ -148,7 +150,7 @@ class RcaViewAdapter:
             self._mouse_down = True
             self._mouse_pos_start = (event['x'], event['y'])
             self._mouse_pos = (event['x'], event['y'])
-            asyncio.create_task(self._animate())
+            #self._animate_task = asyncio.create_task(self._animate())
             rerender = self._view.onLeftMouseButton(event['x'], event['y'], True)
         elif event_type == 'LeftButtonRelease' and self._mouse_down:
             self._mouse_down = False
@@ -163,6 +165,30 @@ class RcaViewAdapter:
             self._streamer.push_content(self.area_name, self._getMetadata(), frame_data.data)
 
     async def _animate(self):
+        min_wait = 0.0
+        while True:
+            start_time = time.time()
+            if self._streamer is not None and self._mouse_down:
+                delta_x = self._mouse_pos[0] - self._mouse_pos_start[0]
+                delta_y = self._mouse_pos[1] - self._mouse_pos_start[1]
+                if delta_x != 0 or delta_y != 0:
+                    self._mouse_pos_start = self._mouse_pos
+                    self._view.triggerRotateCamera(delta_x, delta_y)
+                    self._view.triggerRender()
+                    frame_data = self._view.getFrame()
+                    self._streamer.push_content(self.area_name, self._getMetadata(), frame_data.data)
+                    self._render_count = 1
+                    min_wait = 0.0
+            elif self._streamer is not None and self._render_count < self._max_render_count:
+                self._view.triggerRender()
+                frame_data = self._view.getFrame()
+                self._streamer.push_content(self.area_name, self._getMetadata(), frame_data.data)
+                self._render_count += 1
+                min_wait = 0.008
+            duration = time.time() - start_time
+            wait = max(0.033333 - duration, min_wait)
+            await asyncio.sleep(wait)
+        """
         while self._mouse_down:
             start_time = time.time()
             delta_x = self._mouse_pos[0] - self._mouse_pos_start[0]
@@ -176,7 +202,7 @@ class RcaViewAdapter:
             duration = time.time() - start_time
             wait = max(0.033333 - duration, 0.0)
             await asyncio.sleep(wait)
-
+        """
 # Trame custom ANARI view
 class AnariView:
     def __init__(self, mpi_rank, mpi_size, comm):
@@ -204,7 +230,7 @@ class AnariView:
         cam_position = self._calculateCameraPosition()
 
         # initial number of ray samples per pixel
-        self._ray_samples = 16
+        self._ray_samples = 1
 
         # add geometry to scene
         surfaces = self._createSurfaces()
@@ -263,16 +289,6 @@ class AnariView:
         self._mpi_comm.Bcast((np.array([3, delta_x, delta_y], dtype=np.int16), 3, MPI.INT16_T), root=0)
         self.rotateCamera(delta_x, delta_y)
 
-    #
-    def triggerStartInteraction(self):
-        self._mpi_comm.Bcast((np.array([4, 1, 0], dtype=np.int16), 3, MPI.INT16_T), root=0)
-        self.setNumberOfSamples(1)
-
-    #
-    def triggerStopInteraction(self):
-        self._mpi_comm.Bcast((np.array([4, self._ray_samples, 0], dtype=np.int16), 3, MPI.INT16_T), root=0)
-        self.setNumberOfSamples(self._ray_samples)
-        
     # render frame
     def render(self):
         self._frame_time = round(time.time_ns() / 1000000)
@@ -315,10 +331,8 @@ class AnariView:
     # handler for left mouse button -> return whether or not rerender is required
     def onLeftMouseButton(self, mouse_x, mouse_y, pressed):
         if pressed:
-            self.triggerStartInteraction()
             return False
         else:
-            self.triggerStopInteraction()
             return True
 
     # handler for mouse movement -> return whether or not rerender is required
@@ -412,6 +426,7 @@ class AnariView:
 
     # create material
     def _makeMaterial(self):
+        """
         task_colors = [
             ( 25,  25, 112), (  4, 100,   9), (186,  35,  35), (240, 214,   9),
             (118, 214,  80), ( 42, 206, 206), (179,  61, 184), (255, 182, 177)
@@ -427,7 +442,7 @@ class AnariView:
             (random.randint(35, 225) / 255) ** 2.2,
             (random.randint(35, 225) / 255) ** 2.2
         )
-        """
+        
 
         mat = self._device.newMaterial('physicallyBased')
         mat.setParameter('baseColor', anari.float3, rgb)
